@@ -1,11 +1,10 @@
-//! gray-pi — pi ExtensionAPI host on the gray NDJSON wire.
+//! gray-pi — pi-compatible ExtensionAPI host on the gray NDJSON wire.
 //!
-//! Native port of reference/gray-pi.mjs: TypeScript extensions are transpiled
-//! in-process with oxc and evaluated in an embedded QuickJS (rquickjs)
-//! runtime — no Node, no jiti, no external transpiler. The pi API surface
-//! itself lives in src/prelude.js, a faithful port of the .mjs shims; Rust
-//! provides the wire transport, the transpiler/module loader, and a small set
-//! of `__r_*` host primitives (stdio, /dev/tty, process exec, files).
+//! TypeScript extension factories are transpiled in-process with oxc and
+//! evaluated in an embedded QuickJS (rquickjs) runtime — no Node, no jiti,
+//! no external transpiler. The API surface lives in src/prelude.js; Rust
+//! provides the wire transport, module resolver/loader, and a small set of
+//! `__r_*` host primitives (stdio, /dev/tty, process exec, files).
 //!
 //! Async model: QuickJS promises are driven to completion with
 //! `Promise::finish()` inside each dispatch. Host round-trips (host/ask,

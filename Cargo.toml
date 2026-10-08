@@ -3,7 +3,7 @@ name = "gray-pi-ext"
 version = "0.2.0"
 edition = "2021"
 license = "MIT"
-description = "1:1 pi extension runtime for gray — embedded QuickJS engine, oxc TS transpile, no node"
+description = "Run pi-compatible TypeScript extensions natively on the gray wire"
 
 [[bin]]
 name = "gray-pi-ext"

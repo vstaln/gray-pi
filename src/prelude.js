@@ -1,5 +1,5 @@
 // gray-pi prelude — the pi ExtensionAPI surface, running inside QuickJS.
-// Ported 1:1 from reference/gray-pi.mjs. Host primitives (__r_*) are Rust:
+// Mirrors reference/gray-pi.mjs. Host primitives (__r_*) are Rust:
 //   __r_send(line)            write one NDJSON frame to stdout
 //   __r_log(s)                stderr
 //   __r_host_call(m, pJson)   blocking host/* round-trip -> result JSON

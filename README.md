@@ -1,37 +1,44 @@
-# gray-pi
+<p align="center">
+  <img src="assets/gray-logo.svg" alt="gray" width="96">
+</p>
+<h1 align="center">gray-pi</h1>
+<p align="center">Run pi-compatible TypeScript extensions natively on the gray wire.</p>
+<p align="center">
+  <a href="https://github.com/vstaln/gray-pi/blob/main/LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+  <img alt="gray plugin" src="https://img.shields.io/badge/gray-plugin-7aa2f7.svg">
+  <img alt="rust" src="https://img.shields.io/badge/built%20with-rust-orange.svg">
+</p>
 
-Runs pi extensions **unmodified** under gray — a native Rust binary, no
-Node. `.ts` extension factories are transpiled in-process with **oxc**
+A native Rust runtime for pi-shaped `.ts` extension factories — no Node
+process required. TypeScript is transpiled in-process with **oxc**
 (`oxc_parser` → `oxc_semantic` → `oxc_transformer` → `oxc_codegen`, TS→ESM)
-and evaluated in an embedded **QuickJS** runtime (`rquickjs`). Async
-factories and handlers are driven to completion inside each hook call via
-`Promise::finish` — host round-trips are synchronous Rust primitives, so
-`await` resolves on the job queue, never on a timer.
+and evaluated in an embedded **QuickJS** runtime (`rquickjs`).
 
-The pi `ExtensionAPI`/`ExtensionContext` surface lives in `src/prelude.js`
-(a faithful port of `reference/gray-pi.mjs`); Rust provides the NDJSON
-transport, the module resolver/loader, and `__r_*` host primitives.
-`reference/gray-pi.mjs` is kept as the behavioral reference.
+Async factories and handlers are driven to completion inside each hook call
+with `Promise::finish`. Host round-trips are synchronous Rust primitives, so
+`await` resolves on the job queue rather than on a timer.
+
+The pi `ExtensionAPI`/`ExtensionContext` surface lives in `src/prelude.js`;
+Rust provides the NDJSON transport, module resolver/loader, and `__r_*` host
+primitives for stdio, `/dev/tty`, process execution, and files.
 
 ## Loading
 
-Extensions load from the same dirs pi uses:
+Extensions load from these directories:
 
     <cwd>/.pi/extensions/*.ts        (project)
-    ~/.pi/agent/extensions/*.ts      (pi's own dir — true 1:1)
+    ~/.pi/agent/extensions/*.ts      (pi extension directory)
     ~/.gray/pi/extensions/*.ts       (gray-only extras; honors $GRAY_HOME)
 
-Drop a `.ts` file in any of them and it loads on the next session (or
-`/pi reload`). `import` of bare specifiers (`typebox`, `@earendil-works/*`,
-node builtins `fs`/`path`/`os`/`child_process`/`url`/`util`/`events`) resolves
-to embedded shim modules — curated implementations where the wire needs real
-behavior (`Type.*` JSON schemas, `StringEnum`, `Text`, `truncateToWidth`,
-`matchesKey`, fs/exec shims), deep-inert stubs for everything else (callable,
-constructible, property access never throws).
+Drop a `.ts` file in any of them and it loads on the next session (or after
+`/pi reload`). Bare imports such as `typebox`, `@earendil-works/*`, and Node
+builtins (`fs`, `path`, `os`, `child_process`, `url`, `util`, `events`)
+resolve to embedded shim modules. APIs that need real behavior have curated
+implementations; everything else receives a safe inert stub.
 
-## Emulated 1:1
+## API coverage
 
-| pi API | bridge |
+| pi API | gray bridge |
 |---|---|
 | `pi.on("tool_call"/"tool_result")` | `tool/before` (deny/modify) / `tool/after` |
 | `pi.on("input")` | `input/submit` (transform/handled) |
@@ -40,47 +47,50 @@ constructible, property access never throws).
 | `turn_end`/`agent_settled`/`tool_execution_*`/`session_*` | `event/notify` |
 | `registerTool` / `registerCommand` | manifest `tools`/`commands` |
 | `pi.exec` | `std::process` (cwd/timeout/env) |
-| `pi.events` | JS `EventEmitter` |
+| `pi.events` | JavaScript `EventEmitter` |
 | `appendEntry` / `sessionManager` | `~/.gray/pi/entries.jsonl` |
 | `sendUserMessage`/`sendMessage` | `host/say` |
 | `ui.select`/`confirm`/`input`/`editor` | `host/ask` / `$EDITOR` on `/dev/tty` |
 | `ui.notify`/`setStatus`/`setWorkingMessage` | OSC 777 + title via `/dev/tty` |
 
-## Inert (no wire equivalent)
+## Inert surface
 
-provider/model registration, virtual models, renderers (`registerToolRenderer`,
-message/entry renderers), shortcuts, `setModel`/`thinking` switch,
-`ui.custom`/`setEditorComponent`/`setHeader`/`setFooter`/`setTheme`,
-`compact`, MCP server registration. Registration calls are stored and
-reportable via `/pi status`; everything else is a safe no-op.
+Provider/model registration, virtual models, renderers, shortcuts,
+model/thinking switching, `ui.custom`, header/footer/theme setters,
+compaction controls, and MCP server registration have no gray wire
+equivalent. Registration calls are recorded for `/pi status`; other calls
+are safe no-ops.
 
-Broken extensions never take down the wire: transpile/eval/handler errors
-are collected and shown by `/pi status`; the sidecar keeps serving.
+Broken extensions do not take down the sidecar: transpile, evaluation, and
+handler errors are collected and shown by `/pi status` while the wire loop
+keeps serving requests.
 
 ## Wire
 
-`plugin/manifest` (aggregates loaded tools/commands), `plugin/shutdown`
-(replies then exits), `tool/call`, `command/run` (`/pi status|entries|reload|setup`
-plus extension commands), `tool/before`, `tool/after`, `input/submit`,
-`prompt/context`, `agent/before_start`, `context/build`, `event/notify`
-(`pre_tool`/`post_tool`/`turn_end`). Protocol `2.0`, capabilities
-`["host.ask","host.say"]`. Unknown methods get an error frame. A stdin
-reader thread feeds a channel — the reader is never joined, `host/*` waits
-queue unrelated lines instead of dropping them.
+`plugin/manifest` (aggregates loaded tools/commands), `plugin/shutdown`,
+`tool/call`, `command/run` (`/pi status|entries|reload|setup` plus extension
+commands), `tool/before`, `tool/after`, `input/submit`, `prompt/context`,
+`agent/before_start`, `context/build`, and `event/notify`. Protocol `2.0`,
+capabilities `["host.ask","host.say"]`.
 
-Manifest name is `pi-ext` (`pi` is a reserved registry name — the one
-deliberate divergence from the .mjs, whose manifest reported `pi`).
+The manifest name is `pi-ext` because `pi` is reserved in the gray registry.
+A stdin reader thread feeds a channel, so `host/*` waits can queue unrelated
+lines instead of dropping them.
 
 ## CLI
 
-`gray-pi` (NDJSON loop), `gray-pi manifest`, `gray-pi widget`,
-`gray-pi setup` (no-op — nothing to provision).
+`gray-pi-ext` (NDJSON loop), `gray-pi-ext manifest`, `gray-pi-ext widget`,
+and `gray-pi-ext setup` (currently a no-op).
 
 ## Verify
 
-    cargo test && cargo build --release
-    python3 ../.port-tasks/qa/drive.py target/release/gray-pi   # PASS
+```sh
+cargo test
+cargo build --release
+printf '%s
+' '{"id":1,"method":"plugin/manifest","params":{}}' | target/release/gray-pi-ext
+```
 
-    # goal.ts + todo.ts unmodified:
-    echo '{"id":1,"method":"plugin/manifest","params":{}}' | target/release/gray-pi
-    echo '{"id":2,"method":"tool/call","params":{"name":"todo","args":{"action":"add","text":"x"}}}' | ...
+---
+Part of the [gray](https://github.com/vstaln/gray) plugin ecosystem —
+the open-source AI agent harness. <https://gray.alignment.id>
