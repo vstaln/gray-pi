@@ -1,0 +1,10 @@
+[package]
+name = "gray-pi"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "1:1 pi extension runtime for gray — jiti-loads .ts extensions, bridges ExtensionAPI to the wire"
+
+[[bin]]
+name = "gray-pi"
+path = "src/main.rs"

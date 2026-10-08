@@ -64,3 +64,19 @@ context/build (passthrough) · event/notify · host.ask/host.say outbound.
 
 Verified against the stock pi `goal.ts`: tool calls, /goal command,
 before_agent_start injection, agent_settled nag, ui.notify — all live.
+
+## Rust entry point
+
+`src/main.rs` compiles to a real binary that embeds `gray-pi.mjs`,
+materializes it to `~/.gray/pi/runtime-<ver>.mjs` (re-written when the
+embedded copy differs), then `exec`s `node` — the process *becomes* the
+bridge, zero proxy hop. Install the binary for the normal plugin shape:
+
+```sh
+cargo build --release
+gray plugin install "$PWD/target/release/gray-pi"
+```
+
+Node ≥ 22.18 stays a runtime dep — pi extensions are TypeScript and need
+real Node stdlib semantics; embedding a JS engine would break the 1:1
+guarantee (same trade-off as gray-subagents' embedded Python).
