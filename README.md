@@ -1,82 +1,86 @@
 # gray-pi
 
-Runs pi extensions **unmodified** under gray — jiti loads the same `.ts`
-factories pi does, an `ExtensionAPI`/`ExtensionContext` shim bridges them
-onto gray's NDJSON sidecar wire. One plugin = the whole pi ecosystem.
+Runs pi extensions **unmodified** under gray — a native Rust binary, no
+Node. `.ts` extension factories are transpiled in-process with **oxc**
+(`oxc_parser` → `oxc_semantic` → `oxc_transformer` → `oxc_codegen`, TS→ESM)
+and evaluated in an embedded **QuickJS** runtime (`rquickjs`). Async
+factories and handlers are driven to completion inside each hook call via
+`Promise::finish` — host round-trips are synchronous Rust primitives, so
+`await` resolves on the job queue, never on a timer.
 
-## What runs 1:1
+The pi `ExtensionAPI`/`ExtensionContext` surface lives in `src/prelude.js`
+(a faithful port of `reference/gray-pi.mjs`); Rust provides the NDJSON
+transport, the module resolver/loader, and `__r_*` host primitives.
+`reference/gray-pi.mjs` is kept as the behavioral reference.
+
+## Loading
+
+Extensions load from the same dirs pi uses:
+
+    <cwd>/.pi/extensions/*.ts        (project)
+    ~/.pi/agent/extensions/*.ts      (pi's own dir — true 1:1)
+    ~/.gray/pi/extensions/*.ts       (gray-only extras; honors $GRAY_HOME)
+
+Drop a `.ts` file in any of them and it loads on the next session (or
+`/pi reload`). `import` of bare specifiers (`typebox`, `@earendil-works/*`,
+node builtins `fs`/`path`/`os`/`child_process`/`url`/`util`/`events`) resolves
+to embedded shim modules — curated implementations where the wire needs real
+behavior (`Type.*` JSON schemas, `StringEnum`, `Text`, `truncateToWidth`,
+`matchesKey`, fs/exec shims), deep-inert stubs for everything else (callable,
+constructible, property access never throws).
+
+## Emulated 1:1
 
 | pi API | bridge |
 |---|---|
 | `pi.on("tool_call"/"tool_result")` | `tool/before` (deny/modify) / `tool/after` |
 | `pi.on("input")` | `input/submit` (transform/handled) |
-| `pi.on("before_agent_start")` | `agent/before_start` (message → injected text) |
-| `pi.on("context")` | `prompt/context` (messages → context text) |
-| `pi.on("turn_end" …)`, `tool_execution_start/end`, `session_start/shutdown`, `agent_settled` | `event/notify` |
-| `registerTool` | manifest `tools`, `tool/call` → `execute()` |
-| `registerCommand` | manifest `commands`, `command/run` → `handler()` |
-| `pi.events` | real `EventEmitter` — full 1:1 |
-| `pi.exec` | `execFile` |
-| `appendEntry` | `~/.gray/pi/entries.jsonl` (`/pi entries`) |
-| `sendUserMessage`/`sendMessage` | `host.say` |
-| `ctx.ui.select/confirm/input` | `host.ask` |
-| `ctx.ui.editor` | `$EDITOR` on `/dev/tty` |
-| `ctx.ui.notify` | OSC 777 to `/dev/tty` (fallback `host.say`) |
-| `ctx.ui.setStatus`/`setWorkingMessage` | OSC 2 title `⬡ a · b` |
-| `ctx.ui.setWidget` | string[] → widget snapshot when this plugin owns the slot |
+| `pi.on("before_agent_start")` | `agent/before_start` |
+| `pi.on("context")` | `prompt/context` |
+| `turn_end`/`agent_settled`/`tool_execution_*`/`session_*` | `event/notify` |
+| `registerTool` / `registerCommand` | manifest `tools`/`commands` |
+| `pi.exec` | `std::process` (cwd/timeout/env) |
+| `pi.events` | JS `EventEmitter` |
+| `appendEntry` / `sessionManager` | `~/.gray/pi/entries.jsonl` |
+| `sendUserMessage`/`sendMessage` | `host/say` |
+| `ui.select`/`confirm`/`input`/`editor` | `host/ask` / `$EDITOR` on `/dev/tty` |
+| `ui.notify`/`setStatus`/`setWorkingMessage` | OSC 777 + title via `/dev/tty` |
 
-## Inert (accepted, no wire)
+## Inert (no wire equivalent)
 
-Providers/virtual models, MCP registration, renderers, markdown
-transformers, shortcuts, flags (stored), model/thinking switching,
-sessionManager mutation, `ui.custom`/`setEditorComponent`/`setHeader`/
-`setFooter`/`setTheme`, `ctx.abort`/`compact`/`shutdown`.
+provider/model registration, virtual models, renderers (`registerToolRenderer`,
+message/entry renderers), shortcuts, `setModel`/`thinking` switch,
+`ui.custom`/`setEditorComponent`/`setHeader`/`setFooter`/`setTheme`,
+`compact`, MCP server registration. Registration calls are stored and
+reportable via `/pi status`; everything else is a safe no-op.
 
-## Extension dirs (searched in order)
+Broken extensions never take down the wire: transpile/eval/handler errors
+are collected and shown by `/pi status`; the sidecar keeps serving.
 
-```
-<cwd>/.pi/extensions/*.ts     project-local
-~/.pi/agent/extensions/*.ts   pi's own dir — extensions shared 1:1
-~/.gray/pi/extensions/*.ts    gray-only extras
-```
+## Wire
 
-Runtime imports (`typebox`, `@earendil-works/*`) resolve via symlink
-farms at `~/.gray/pi/node_modules` and `~/.pi/agent/node_modules`,
-created by setup against the global pi install.
+`plugin/manifest` (aggregates loaded tools/commands), `plugin/shutdown`
+(replies then exits), `tool/call`, `command/run` (`/pi status|entries|reload|setup`
+plus extension commands), `tool/before`, `tool/after`, `input/submit`,
+`prompt/context`, `agent/before_start`, `context/build`, `event/notify`
+(`pre_tool`/`post_tool`/`turn_end`). Protocol `2.0`, capabilities
+`["host.ask","host.say"]`. Unknown methods get an error frame. A stdin
+reader thread feeds a channel — the reader is never joined, `host/*` waits
+queue unrelated lines instead of dropping them.
 
-## Setup / install
+Manifest name is `pi-ext` (`pi` is a reserved registry name — the one
+deliberate divergence from the .mjs, whose manifest reported `pi`).
 
-```sh
-./gray-pi.mjs setup                    # jiti + symlink farms
-gray plugin install "$PWD/gray-pi.mjs" # or copy into a scaffold
-```
+## CLI
 
-Deps: node ≥ 22.18 (for jiti TS) — v24 verified; `npm i jiti` in this
-dir (or `setup` does it).
+`gray-pi` (NDJSON loop), `gray-pi manifest`, `gray-pi widget`,
+`gray-pi setup` (no-op — nothing to provision).
 
-## Commands / state
+## Verify
 
-`/pi status|list` — loaded extensions, tools, commands, errors ·
-`/pi entries [n]` — appendEntry store · `/pi reload` — re-run factories ·
-`/pi setup` — provision deps. Wire: manifest · tool/call · command/run ·
-tool/before|after · input/submit · prompt/context · agent/before_start ·
-context/build (passthrough) · event/notify · host.ask/host.say outbound.
+    cargo test && cargo build --release
+    python3 ../.port-tasks/qa/drive.py target/release/gray-pi   # PASS
 
-Verified against the stock pi `goal.ts`: tool calls, /goal command,
-before_agent_start injection, agent_settled nag, ui.notify — all live.
-
-## Rust entry point
-
-`src/main.rs` compiles to a real binary that embeds `gray-pi.mjs`,
-materializes it to `~/.gray/pi/runtime-<ver>.mjs` (re-written when the
-embedded copy differs), then `exec`s `node` — the process *becomes* the
-bridge, zero proxy hop. Install the binary for the normal plugin shape:
-
-```sh
-cargo build --release
-gray plugin install "$PWD/target/release/gray-pi"
-```
-
-Node ≥ 22.18 stays a runtime dep — pi extensions are TypeScript and need
-real Node stdlib semantics; embedding a JS engine would break the 1:1
-guarantee (same trade-off as gray-subagents' embedded Python).
+    # goal.ts + todo.ts unmodified:
+    echo '{"id":1,"method":"plugin/manifest","params":{}}' | target/release/gray-pi
+    echo '{"id":2,"method":"tool/call","params":{"name":"todo","args":{"action":"add","text":"x"}}}' | ...

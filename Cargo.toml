@@ -1,10 +1,22 @@
 [package]
-name = "gray-pi"
-version = "0.1.0"
+name = "gray-pi-ext"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
-description = "1:1 pi extension runtime for gray — jiti-loads .ts extensions, bridges ExtensionAPI to the wire"
+description = "1:1 pi extension runtime for gray — embedded QuickJS engine, oxc TS transpile, no node"
 
 [[bin]]
-name = "gray-pi"
+name = "gray-pi-ext"
 path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"
+rquickjs = { version = "0.14", features = ["loader"] }
+oxc_allocator = "0.147"
+oxc_parser = "0.147"
+oxc_ast = "0.147"
+oxc_semantic = "0.147"
+oxc_transformer = "0.147"
+oxc_codegen = "0.147"
+oxc_span = "0.147"
+oxc_diagnostics = "0.147"
