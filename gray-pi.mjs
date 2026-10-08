@@ -143,6 +143,8 @@ const sessionManager = {
 				.map((l) => JSON.parse(l));
 		} catch { return []; }
 	},
+	getBranch: () => sessionManager.entries,
+	getEntries: () => sessionManager.entries,
 	leafId: null, getEntry: (id) => sessionManager.entries.find((e) => e.id === id),
 	getPath: () => ENTRIES,
 };
@@ -272,6 +274,17 @@ async function handleTool(name, args) {
 	let out = await def.execute(`call-${Date.now()}`, args, abortCtl.signal, () => {}, ctx);
 	if (out?.then) out = await out;
 	const content = textOf(out?.content ?? out);
+	// pi persists tool `details` on the session branch — mirror that so
+	// extensions that reconstruct state by replaying toolResults (goal.ts)
+	// behave the same after a restart.
+	if (out?.details !== undefined) {
+		fs.mkdirSync(PI_DIR, { recursive: true });
+		fs.appendFileSync(ENTRIES, JSON.stringify({
+			id: `e${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
+			ts: Date.now(), type: "message",
+			message: { role: "toolResult", toolName: name, details: out.details },
+		}) + "\n");
+	}
 	return out?.isError ? { content, is_error: true } : { content };
 }
 
