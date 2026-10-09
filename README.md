@@ -80,7 +80,27 @@ lines instead of dropping them.
 ## CLI
 
 `gray-pi-ext` (NDJSON loop), `gray-pi-ext manifest`, `gray-pi-ext widget`,
-and `gray-pi-ext setup` (currently a no-op).
+and `gray-pi-ext setup` (currently a no-op). Install with
+`gray plugin install <path-to-binary>` — manifest name `pi-ext`.
+
+## Bundled pi index
+
+`gray-pi` also ships the pi package index (absorbed from `gray-pi-index`),
+so the ecosystem search/scaffold workflow lives in the same sidecar
+(the original Rust implementation is preserved at `reference/gray-pi-index.rs`):
+
+- `pi_search` — query npm for `keywords:pi-package` + `keywords:pi-extension`;
+  results cache into `~/.gray/pi-index/index.json`.
+- `pi_info` — registry details for one package, cross-referenced against
+  `~/grayplugins/PORTS.md` for local port status.
+- `pi_scaffold` — `gray account new` + `npm pack` vendoring +
+  `SCAFFOLD-SPEC.md` with a ready-made port prompt.
+
+All network goes through `curl`; scaffold shells out to `gray`, `npm`, and
+`tar`. The `/pi` command covers both surfaces:
+
+    /pi status|list|entries [n]|reload|setup    (runtime)
+    /pi search [q]|info <pkg>|scaffold <pkg>    (index)
 
 ## Verify
 

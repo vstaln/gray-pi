@@ -678,7 +678,7 @@ fn run() -> i32 {
             if let Some(r) = v.get("result") {
                 println!("{r}");
             } else {
-                println!("{}", json!({"name":"pi-ext","version":env!("CARGO_PKG_VERSION"),"protocol":"2.0","tools":[],"commands":["/pi"],"hooks":[],"capabilities":[]}));
+                println!("{}", json!({"name":"pi-ext","version":env!("CARGO_PKG_VERSION"),"protocol":"2.0","tools":[{"name":"pi_search","description":"Search the pi package/extension ecosystem on npm (keywords:pi-package + keywords:pi-extension). Optional `query` narrows results. Results are cached into ~/.gray/pi-index/index.json.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Optional search terms."}}}},{"name":"pi_info","description":"Registry details for one npm package plus local availability status cross-referenced against ~/grayplugins/PORTS.md.","parameters":{"type":"object","properties":{"name":{"type":"string","description":"npm package name, e.g. pi-lens or @scope/pkg."}},"required":["name"]}},{"name":"pi_scaffold","description":"Scaffold a compatible sidecar: `gray account new` for the package, vendor its npm tarball into vendor/, and write SCAFFOLD-SPEC.md.","parameters":{"type":"object","properties":{"name":{"type":"string","description":"npm package name to scaffold a sidecar for."}},"required":["name"]}}],"commands":["/pi"],"hooks":[],"capabilities":[]}));
             }
             return 0;
         }
@@ -873,5 +873,32 @@ export default function (pi: any) {
         let out = dispatch_frame(&e, &J::from(2), "tool/call", &json!({"name":"ok","args":{}}));
         assert_eq!(out["result"]["content"], "fine");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn bundled_index_tools() {
+        let (e, _w) = engine();
+        let mf = dispatch_frame(&e, &J::from(1), "plugin/manifest", &json!({}));
+        let tools = mf["result"]["tools"].as_array().unwrap();
+        for n in ["pi_search", "pi_info", "pi_scaffold"] {
+            assert!(tools.iter().any(|t| t["name"] == n), "missing {n}: {mf}");
+        }
+        // /pi usage advertises the index subcommands
+        let out = dispatch_frame(&e, &J::from(2), "command/run",
+            &json!({"name":"/pi","argv":["bogus"],"session":{"id":"t","cwd":"/tmp"}}));
+        let text = out["result"]["text"].as_str().unwrap_or("");
+        assert!(text.contains("scaffold"), "{text}");
+        // /pi info with no name → friendly error text, no network needed
+        let out = dispatch_frame(&e, &J::from(3), "command/run",
+            &json!({"name":"/pi","argv":["info"],"session":{"id":"t","cwd":"/tmp"}}));
+        assert!(out["result"]["text"].as_str().unwrap_or("").contains("missing required argument"), "{out}");
+        // tool/call path: validation error surfaces as content + is_error
+        let out = dispatch_frame(&e, &J::from(4), "tool/call",
+            &json!({"name":"pi_info","args":{}}));
+        assert_eq!(out["result"]["is_error"], J::Bool(true), "{out}");
+        assert!(out["result"]["content"].as_str().unwrap_or("").contains("missing required argument"), "{out}");
+        // unknown tools still error through the JS dispatcher
+        let out = dispatch_frame(&e, &J::from(5), "tool/call", &json!({"name":"bogus","args":{}}));
+        assert!(out.get("error").is_some(), "{out}");
     }
 }

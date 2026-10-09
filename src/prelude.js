@@ -388,6 +388,204 @@ const pi = {
 	events: bus,
 };
 
+// ---------------------------------------------------------------- pi-index
+// Bundled port of gray-pi-index: pi_search / pi_info / pi_scaffold tools plus
+// /pi search|info|scaffold subcommands. All network goes through curl; scaffold
+// shells out to `gray account new`, `npm pack`, and `tar`.
+const IDX_DIR = (__r_env("GRAY_HOME") || __r_home() + "/.gray") + "/pi-index";
+const PLUGINS_DIR = __r_env("GRAY_PLUGINS_DIR") || __r_home() + "/grayplugins";
+const PORTS_FILE = PLUGINS_DIR + "/PORTS.md";
+
+function ixUrlEncode(s) {
+	let out = "";
+	for (const ch of String(s)) {
+		if (/^[A-Za-z0-9\-_.~@/]$/.test(ch)) out += ch;
+		else if (ch.charCodeAt(0) < 128) out += "%" + ch.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0");
+		else out += encodeURIComponent(ch);
+	}
+	return out.replace(/\//g, "%2F");
+}
+
+function ixCurl(url, timeout) {
+	const r = pi.exec("curl", ["-sS", "-L", "--max-time", String(timeout), url], { timeout: timeout + 5 });
+	if (r.code !== 0) {
+		const line = String(r.stderr || "").split("\n").find((l) => l.startsWith("curl:")) || "curl failed";
+		throw new Error(line);
+	}
+	return r.stdout;
+}
+
+function ixSearchRows(text) {
+	const body = ixCurl(`https://registry.npmjs.org/-/v1/search?size=50&text=${text}`, 20);
+	let doc;
+	try { doc = JSON.parse(body); } catch { throw new Error("bad json from npm"); }
+	return ((doc && doc.objects) || []).map((o) => ({
+		name: (o && o.package && o.package.name) || "",
+		version: (o && o.package && o.package.version) || "",
+		description: (o && o.package && o.package.description) || "",
+		fetched_at: Math.floor(Date.now() / 1000),
+	}));
+}
+
+// Merge rows into the cached index (dedup by name, newest row wins).
+function ixUpdateIndex(rows) {
+	const file = IDX_DIR + "/index.json";
+	let index = {};
+	try { index = JSON.parse(__r_read_file(file) || "{}"); } catch { index = {}; }
+	if (index === null || typeof index !== "object" || Array.isArray(index)) index = {};
+	for (const r of rows) if (r.name) index[r.name] = r;
+	__r_mkdir_p(IDX_DIR);
+	__r_write_file(file, JSON.stringify(index, null, 2));
+}
+
+function ixPiSearch(query) {
+	const all = [], errs = [];
+	for (const kw of ["pi-package", "pi-extension"]) {
+		const text = query && query.trim() ? `${ixUrlEncode(query.trim())}+keywords:${kw}` : `keywords:${kw}`;
+		try { all.push(...ixSearchRows(text)); } catch (e) { errs.push(String((e && e.message) || e)); }
+	}
+	if (!all.length && errs.length) throw new Error(`npm search failed: ${errs.join("; ")}`);
+	ixUpdateIndex(all);
+	all.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+	const rows = all.filter((r, i) => i === 0 || all[i - 1].name !== r.name);
+	let out = rows.slice(0, 40)
+		.map((r) => `${r.name}@${r.version} — ${String(r.description || "").split("\n")[0]}`)
+		.join("\n");
+	if (rows.length > 40) out += `\n…and ${rows.length - 40} more (cached in ~/.gray/pi-index/index.json)`;
+	return out.trimEnd() || "no pi packages found";
+}
+
+// Classify a package against the local availability tracker.
+function ixCompatStatus(name, ports) {
+	const short = name.split("/").pop();
+	let heading = "";
+	for (const line of ports.split("\n")) {
+		if (line.startsWith("#")) heading = line.replace(/^#+|#+$/g, "").trim().toLowerCase();
+		if (!(line.includes(name) || (short.length > 3 && line.includes(short)))) continue;
+		const pos = line.indexOf("gray-");
+		if (pos >= 0) {
+			let tgt = "";
+			for (const c of line.slice(pos)) {
+				if (!/[A-Za-z0-9-]/.test(c)) break;
+				tgt += c;
+			}
+			if (tgt.length > 5) return `available → ${tgt}`;
+		}
+		if (heading.includes("not portable") || heading.includes("skip") || heading.includes("deliberately"))
+			return `blocked: ${heading.trim()}`;
+		if (heading.includes("done") || heading.includes("batch")) return "available (listed in PORTS.md)";
+		return "mentioned in PORTS.md (status unclear)";
+	}
+	return "unavailable";
+}
+
+function ixPiInfo(name) {
+	if (!name || !name.trim()) throw new Error("missing required argument: name");
+	name = name.trim();
+	let body;
+	try { body = ixCurl(`https://registry.npmjs.org/${ixUrlEncode(name)}`, 20); }
+	catch (e) { throw new Error(`registry lookup failed for ${name}: ${(e && e.message) || e}`); }
+	let doc;
+	try { doc = JSON.parse(body); } catch { throw new Error(`${name}: not found or bad json`); }
+	if (doc && "error" in doc) throw new Error(`${name}: ${typeof doc.error === "string" ? doc.error : "not found"}`);
+	const latest = (doc && doc["dist-tags"] && doc["dist-tags"].latest) || "?";
+	const desc = (doc && doc.description) || (doc && doc.versions && doc.versions[latest] && doc.versions[latest].description) || "";
+	const modified = (doc && doc.time && doc.time.modified) || "?";
+	const raw = __r_read_file(PORTS_FILE);
+	const status = raw === null || raw === undefined ? "unknown (PORTS.md unreadable)" : ixCompatStatus(name, raw);
+	return `${name}@${latest}\n${desc}\nmodified: ${modified}\nport status: ${status}`;
+}
+
+// `pi-foo` / `@scope/pi-foo` → `gray-foo`; keeps it filesystem- and tool-safe.
+function ixGrayishName(name) {
+	let base = name.split("/").pop();
+	if (base.startsWith("pi-")) base = base.slice(3);
+	const safe = [...base].map((c) => (/[A-Za-z0-9-]/.test(c) ? c : "-")).join("");
+	return `gray-${safe.replace(/^-+|-+$/g, "")}`;
+}
+
+function ixPiScaffold(name) {
+	name = String(name || "").trim();
+	if (!name) throw new Error("missing required argument: name");
+	const dirName = ixGrayishName(name);
+	const parent = PLUGINS_DIR;
+	const dest = `${parent}/${dirName}`;
+	if (__r_exists(dest)) throw new Error(`${dest} already exists`);
+
+	// 1. scaffold the gray account
+	const out = pi.exec("gray", ["account", "new", dirName, "--no-repo",
+		"--description", `Gray sidecar compatible with npm package ${name}`], { cwd: parent });
+	if (out.code !== 0) throw new Error(`gray account new failed: ${String(out.stderr || "").trim()}`);
+
+	// 2. vendor the npm tarball
+	const vendor = `${dest}/vendor`;
+	let vendored = "npm pack failed";
+	if (__r_mkdir_p(vendor)) {
+		const pack = pi.exec("npm", ["pack", name, "--pack-destination", vendor], { cwd: vendor });
+		if (pack.code === 0) {
+			const tgz = String(pack.stdout || "").trim().split("\n").pop().trim();
+			const ex = pi.exec("tar", ["xzf", tgz, "--strip-components=1"], { cwd: vendor });
+			__r_rm(`${vendor}/${tgz}`);
+			vendored = ex.code === 0 ? `vendored ${tgz}` : `packed ${tgz} but extraction failed`;
+		} else {
+			vendored = `npm pack failed: ${String(pack.stderr || "").trim()}`;
+		}
+	}
+
+	// 3. SCAFFOLD-SPEC.md stub
+	const vendoredSrc = __r_exists(`${vendor}/package.json`)
+		? "vendored package lives in vendor/ — read vendor/package.json + entry files."
+		: "vendor/ is empty or unextracted — re-run `npm pack` manually.";
+	const spec = `# SCAFFOLD-SPEC: ${name} → ${dirName}
+
+Source package: npm \`${name}\` — ${vendoredSrc}
+
+## What the extension registers
+
+TODO — scan vendor/ for \`pi.registerTool(\`, \`pi.registerCommand(\`, \`pi.on(\`.
+
+## Wire methods to map
+
+- pi.registerTool → \`tools\` in manifest + \`tool/call\`
+- pi.registerCommand → \`commands\` + \`command/run\`
+- pi.on("tool_call"/"tool_result") → \`tool/before\` / \`tool/after\` hooks
+- pi.on("before_agent_start"/"context") → \`prompt/context\` hook
+- pi.on("turn_end"/session events) → \`event/notify\` notification
+
+## Subagent prompt
+
+Read ~/grayplugins/PORTING.md and ~/grayplugins/gray-notify/src/main.rs. Implement npm \`${name}\` (vendored under ${dirName}/vendor/) as a gray sidecar in ${dirName}/src/main.rs. Steps: cargo test && cargo build --release && gray account check → "check ok", README with wire methods + install line, one commit. Do NOT \`gray plugin install\`.
+`;
+	__r_write_file(`${dest}/SCAFFOLD-SPEC.md`, spec);
+	return `scaffolded ${dirName} in ${dest}\n${vendored}\nwrote SCAFFOLD-SPEC.md\n\nImplementation prompt:\nRead ~/grayplugins/PORTING.md and ~/grayplugins/gray-notify/src/main.rs. Implement npm \`${name}\` (vendored under ${dirName}/vendor/) as a gray sidecar in ${dirName}/src/main.rs; run cargo test && cargo build --release && gray account check; update README; one commit.`;
+}
+
+// Wrap an index function as a pi tool execute: Ok → {content}, Err → {content, isError}.
+function ixTool(fn) {
+	return async (id, args) => {
+		try { return { content: await fn(args || {}) }; }
+		catch (e) { return { content: String((e && e.message) || e), isError: true }; }
+	};
+}
+pi.registerTool({
+	name: "pi_search",
+	description: "Search the pi package/extension ecosystem on npm (keywords:pi-package + keywords:pi-extension). Optional `query` narrows results. Results are cached into ~/.gray/pi-index/index.json.",
+	parameters: { type: "object", properties: { query: { type: "string", description: "Optional search terms." } } },
+	execute: ixTool((a) => ixPiSearch(a.query)),
+});
+pi.registerTool({
+	name: "pi_info",
+	description: "Registry details for one npm package plus local availability status (available → gray-X / unavailable / blocked) cross-referenced against ~/grayplugins/PORTS.md.",
+	parameters: { type: "object", properties: { name: { type: "string", description: "npm package name, e.g. pi-lens or @scope/pkg." } }, required: ["name"] },
+	execute: ixTool((a) => ixPiInfo(a.name || "")),
+});
+pi.registerTool({
+	name: "pi_scaffold",
+	description: "Scaffold a compatible sidecar: `gray account new` for the package, vendor its npm tarball into vendor/, and write SCAFFOLD-SPEC.md with a ready-made implementation prompt. Use after pi_search/pi_info finds an unavailable package.",
+	parameters: { type: "object", properties: { name: { type: "string", description: "npm package name to scaffold a sidecar for." } }, required: ["name"] },
+	execute: ixTool((a) => ixPiScaffold(a.name || "")),
+});
+
 // ---------------------------------------------------------------- events
 async function emit(event, payload) {
 	const results = [];
@@ -459,7 +657,14 @@ async function handleCommand(name, argv, sess) {
 		}
 		if (sub === "reload") { return { __reload: true }; }
 		if (sub === "setup") { return { text: "embedded QuickJS engine — nothing to provision" }; }
-		return { text: "usage: /pi status|list|entries [n]|reload|setup" };
+		if (sub === "search" || sub === "info" || sub === "scaffold") {
+			try {
+				const text = sub === "search" ? ixPiSearch(argv[1])
+					: sub === "info" ? ixPiInfo(argv[1] || "") : ixPiScaffold(argv[1] || "");
+				return { text };
+			} catch (e) { return { text: String((e && e.message) || e) }; }
+		}
+		return { text: "usage: /pi status|list|entries [n]|reload|setup|search [q]|info <pkg>|scaffold <pkg>" };
 	}
 	const cmd = commands.get(String(name).replace(/^\//, ""));
 	if (!cmd?.handler) throw new Error(`unknown pi command ${name}`);
