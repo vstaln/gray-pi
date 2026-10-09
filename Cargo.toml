@@ -20,3 +20,13 @@ oxc_transformer = "0.147"
 oxc_codegen = "0.147"
 oxc_span = "0.147"
 oxc_diagnostics = "0.147"
+
+# Dev builds: full DWARF bloats the binary and every edit pays the link.
+# Line tables keep file:line in panics and backtraces; deps carry none
+# (nobody steps into tokio). Need a debugger? CARGO_PROFILE_DEV_DEBUG=2
+# for that one build.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
