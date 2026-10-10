@@ -1,13 +1,25 @@
-<p align="center">
-  <img src="assets/gray-logo.svg" alt="gray" width="96">
-</p>
-<h1 align="center">gray-pi</h1>
-<p align="center">Run pi-compatible TypeScript extensions natively on the gray wire.</p>
-<p align="center">
-  <a href="https://github.com/vstaln/gray-pi/blob/main/LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <img alt="gray plugin" src="https://img.shields.io/badge/gray-plugin-7aa2f7.svg">
-  <img alt="rust" src="https://img.shields.io/badge/built%20with-rust-orange.svg">
-</p>
+<div align="center">
+  <img alt="gray-pi" src="assets/icon.svg" width="120" height="120" />
+  <h1>gray-pi</h1>
+  <p><strong>Run pi-compatible TypeScript extensions natively, with no Node process.</strong></p>
+  <p>
+    <a href="https://gray.alignment.id">Website</a> ·
+    <a href="https://gray.alignment.id/plugins/gray-pi">Store</a> ·
+    <a href="https://github.com/vstaln/gray-pi">Source</a> ·
+    <a href="https://github.com/vstaln/gray">gray</a>
+  </p>
+  <p>
+    <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-1c1c20?style=flat-square&labelColor=0a0a0b" /></a>
+    <a href="https://www.rust-lang.org"><img alt="Built with Rust" src="https://img.shields.io/badge/built%20with-rust-1c1c20?style=flat-square&labelColor=0a0a0b&logo=rust&logoColor=d4a373" /></a>
+    <a href="https://gray.alignment.id/plugins/gray-pi"><img alt="gray plugin" src="https://img.shields.io/badge/gray-plugin-1c1c20?style=flat-square&labelColor=0a0a0b&color=7aa2f7" /></a>
+  </p>
+</div>
+
+<br/>
+
+```bash
+gray plugin install gray-pi
+```
 
 A native Rust runtime for pi-shaped `.ts` extension factories — no Node
 process required. TypeScript is transpiled in-process with **oxc**
@@ -110,6 +122,10 @@ cargo build --release
 printf '%s
 ' '{"id":1,"method":"plugin/manifest","params":{}}' | target/release/gray-pi-ext
 ```
+
+## Tags
+
+`gray` `plugin` `pi` `rust`
 
 ---
 Part of the [gray](https://github.com/vstaln/gray) plugin ecosystem —
