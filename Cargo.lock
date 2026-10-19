@@ -198,7 +198,7 @@ dependencies = [
 
 [[package]]
 name = "gray-pi-ext"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "oxc_allocator",
  "oxc_ast",
